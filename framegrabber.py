@@ -35,15 +35,20 @@ log = logging.getLogger("framegrabber")
 APPDETAILS_URL = "https://store.steampowered.com/api/appdetails"
 STORE_URL = "https://store.steampowered.com/hardware/steamframe"
 USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Firefox/124.0"
-DEFAULT_RSS = (
-    "https://news.google.com/rss/search?"
-    "q=%22Steam+Frame%22+(release+OR+reservation+OR+pre-order+OR+available+OR+order)"
-    "&hl=en-US&gl=US&ceid=US:en"
-)
-DEFAULT_KEYWORDS = (
-    "release,launch,order,pre-order,preorder,reserve,reservation,"
-    "available,availability,date,price,ship,buy,in stock"
-)
+
+# Official Valve news sources (RSS). We watch Valve's own feeds — not a press aggregator — and
+# filter their items to ones mentioning the Steam Frame:
+#   - group 4145017 = the "Steam" news group; platform/hardware announcements such as "Steam
+#     Machine and Steam Frame Standalone Verified" (mixed with unrelated Steam news, hence the
+#     keyword filter).
+#   - group 45479024 = the Steam Frame's own clan/news group (matches the hardware page's
+#     og:image clan id); carried earlier Frame news.
+#   - app 4165890 = the Steam Frame product news hub (empty until Valve posts there).
+DEFAULT_NEWS_FEEDS = [
+    "https://store.steampowered.com/feeds/news/group/4145017/",
+    "https://store.steampowered.com/feeds/news/group/45479024/",
+    "https://store.steampowered.com/feeds/news/app/4165890/",
+]
 
 
 @dataclass
@@ -52,7 +57,6 @@ class Config:
     ntfy_topic: str = os.environ.get("NTFY_TOPIC", "")
     ntfy_token: str = os.environ.get("NTFY_TOKEN", "")
     cc: str = os.environ.get("FRAMEGRABBER_CC", "us")
-    rss_url: str = os.environ.get("FRAMEGRABBER_NEWS_RSS", DEFAULT_RSS)
     primary_only: bool = os.environ.get("FRAMEGRABBER_PRIMARY_ONLY", "") == "1"
     state_file: Path = field(
         default_factory=lambda: Path(os.environ.get("FRAMEGRABBER_STATE", "/data/state.json"))
@@ -63,13 +67,14 @@ class Config:
             for x in os.environ.get("FRAMEGRABBER_APPIDS", "4165890").replace(",", " ").split()
         ]
     )
-    keywords: list[str] = field(
-        default_factory=lambda: [
-            k.strip().lower()
-            for k in os.environ.get("FRAMEGRABBER_NEWS_KEYWORDS", DEFAULT_KEYWORDS).split(",")
-            if k.strip()
-        ]
-    )
+    # Official Steam news feeds to watch. Defaults to the per-appid feeds; override with an
+    # explicit space/comma-separated URL list via FRAMEGRABBER_NEWS_FEEDS.
+    news_feeds: list[str] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        if not self.news_feeds:
+            env = os.environ.get("FRAMEGRABBER_NEWS_FEEDS", "")
+            self.news_feeds = env.replace(",", " ").split() if env else list(DEFAULT_NEWS_FEEDS)
 
 
 # --- http (stdlib urllib; returns None on any failure so a run degrades gracefully) ------
@@ -139,7 +144,7 @@ def appdetails_reasons(old: dict | None, new: dict) -> list[str]:
     return reasons
 
 
-# --- signal 2: news RSS (keyword-filtered) -----------------------------------------------
+# --- signal 2: official Steam news feed --------------------------------------------------
 
 
 def parse_rss(raw: bytes) -> list[dict]:
@@ -160,17 +165,15 @@ def parse_rss(raw: bytes) -> list[dict]:
     return items
 
 
-def news_matches(title: str, summary: str, keywords: list[str]) -> bool:
-    """A relevant availability item: about the Steam Frame AND mentions a keyword."""
-    if "steam frame" not in title.lower():
-        return False
-    hay = f"{title} {summary}".lower()
-    return any(k in hay for k in keywords)
-
-
 def fetch_news(url: str) -> list[dict] | None:
     raw = http_get(url)
     return None if raw is None else parse_rss(raw)
+
+
+def mentions_frame(item: dict) -> bool:
+    """True if a (Valve-official) news item is about the Steam Frame."""
+    text = f"{item.get('title', '')} {item.get('summary', '')}".lower()
+    return "steam frame" in text or "steamframe" in text
 
 
 # --- state -------------------------------------------------------------------------------
@@ -178,14 +181,15 @@ def fetch_news(url: str) -> list[dict] | None:
 
 def load_state(path: Path) -> dict:
     if not path.exists():
-        return {"appdetails": {}, "seen_news": []}
+        return {"appdetails": {}, "seen_news": [], "news_initialized": False}
     try:
         data = json.loads(path.read_text())
     except (OSError, ValueError) as e:
         log.warning("state %s unreadable, starting fresh: %s", path, e)
-        return {"appdetails": {}, "seen_news": []}
+        return {"appdetails": {}, "seen_news": [], "news_initialized": False}
     data.setdefault("appdetails", {})
     data.setdefault("seen_news", [])
+    data.setdefault("news_initialized", False)
     return data
 
 
@@ -267,30 +271,46 @@ def run_appdetails(cfg: Config, state: dict, dry_run: bool) -> None:
 
 
 def run_news(cfg: Config, state: dict, dry_run: bool) -> None:
-    items = fetch_news(cfg.rss_url)
-    if items is None:
+    # Gather items across all official feeds. If every feed fetch failed, do nothing (don't let
+    # a transient outage look like "no news" and re-seed).
+    items: list[dict] = []
+    any_ok = False
+    for url in cfg.news_feeds:
+        fetched = fetch_news(url)
+        if fetched is None:
+            continue
+        any_ok = True
+        items.extend(fetched)
+    if not any_ok:
         return
-    # Cold start: record existing ids as seen so we only alert on future articles.
-    if not state["seen_news"]:
-        state["seen_news"] = [it["id"] for it in items]
+
+    # Cold start: record whatever exists now as seen so we only alert on *future* posts. Use an
+    # explicit flag (not "seen_news is empty") because the Steam Frame feeds are empty today —
+    # without this, the first real post would be silently seeded instead of pushed.
+    if not state["news_initialized"]:
+        state["seen_news"] = list({it["id"] for it in items})
+        state["news_initialized"] = True
         log.info("news baseline seeded with %d item(s)", len(state["seen_news"]))
         return
+
     seen = set(state["seen_news"])
     for it in items:
         if it["id"] in seen:
             continue
-        state["seen_news"].append(it["id"])
-        if news_matches(it["title"], it["summary"], cfg.keywords):
-            log.warning("NEWS EVENT: %s", it["title"])
-            _push(
-                cfg,
-                dry_run,
-                title="Steam Frame in the news",
-                body=f"{it['title']}\n\n{it['link']}",
-                priority=3,
-                tags="newspaper",
-                click=it["link"] or STORE_URL,
-            )
+        state["seen_news"].append(it["id"])  # mark seen even if not about the Frame
+        seen.add(it["id"])
+        if not mentions_frame(it):
+            continue  # official feed, but this post isn't about the Steam Frame
+        log.warning("NEWS EVENT: %s", it["title"])
+        _push(
+            cfg,
+            dry_run,
+            title="Steam Frame news",
+            body=f"{it['title']}\n\n{it['link']}",
+            priority=3,
+            tags="newspaper",
+            click=it["link"] or STORE_URL,
+        )
 
 
 def run(cfg: Config, dry_run: bool = False) -> None:

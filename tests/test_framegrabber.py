@@ -55,18 +55,11 @@ def test_literal_coming_soon_date_does_not_fire():
 # --- news matching + parsing -------------------------------------------------------------
 
 
-def test_news_matches_availability():
-    kw = ["release", "reservation", "order"]
-    assert fg.news_matches("Steam Frame reservations open", "", kw)
-    assert fg.news_matches(
-        "Hands-on with the Steam Frame", "pre-order details and release date", ["release"]
-    )
-
-
-def test_news_ignores_unrelated_or_specsy():
-    kw = ["release", "order"]
-    assert not fg.news_matches("Steam Deck 2 rumor", "", kw)  # not the Frame
-    assert not fg.news_matches("Steam Frame specs leak", "teardown photos", kw)  # no keyword
+def test_mentions_frame():
+    assert fg.mentions_frame({"title": "Steam Machine and Steam Frame Verified", "summary": ""})
+    assert fg.mentions_frame({"title": "Hardware update", "summary": "...the SteamFrame ships..."})
+    assert not fg.mentions_frame({"title": "Update to Store Tags", "summary": "tag edits"})
+    assert not fg.mentions_frame({"title": "Steam Deck back in stock", "summary": ""})
 
 
 def test_parse_rss():
@@ -90,7 +83,7 @@ def test_parse_rss_malformed_returns_empty():
 
 def test_state_roundtrip(tmp_path):
     p = tmp_path / "state.json"
-    assert fg.load_state(p) == {"appdetails": {}, "seen_news": []}
+    assert fg.load_state(p) == {"appdetails": {}, "seen_news": [], "news_initialized": False}
     st = {"appdetails": {"4165890": fg.fingerprint(COMING_SOON)}, "seen_news": ["a", "b"]}
     fg.save_state(p, st)
     assert fg.load_state(p)["seen_news"] == ["a", "b"]
@@ -105,38 +98,54 @@ def test_state_seen_news_capped(tmp_path):
 def test_corrupt_state_starts_fresh(tmp_path):
     p = tmp_path / "state.json"
     p.write_text("{bad")
-    assert fg.load_state(p) == {"appdetails": {}, "seen_news": []}
+    assert fg.load_state(p) == {"appdetails": {}, "seen_news": [], "news_initialized": False}
 
 
 # --- orchestration (mock network via monkeypatch) ----------------------------------------
 
 
+def _frame_cfg(tmp_path, **kw):
+    return fg.Config(ntfy_topic="t", news_feeds=["u1"], state_file=tmp_path / "s.json", **kw)
+
+
 def test_news_cold_start_seeds_no_push(tmp_path, monkeypatch):
+    # Even a Frame-mentioning item is only seeded (not pushed) on the first run.
     monkeypatch.setattr(
-        fg, "fetch_news", lambda url: [{"id": "g1", "title": "t", "link": "", "summary": ""}]
+        fg,
+        "fetch_news",
+        lambda url: [{"id": "g1", "title": "Steam Frame!", "link": "", "summary": ""}],
     )
     pushed = []
     monkeypatch.setattr(fg, "notify", lambda cfg, **kw: pushed.append(kw) or True)
-    cfg = fg.Config(ntfy_topic="t", state_file=tmp_path / "s.json")
-    state = {"appdetails": {}, "seen_news": []}
-    fg.run_news(cfg, state, dry_run=False)
-    assert state["seen_news"] == ["g1"] and pushed == []
+    state = {"appdetails": {}, "seen_news": [], "news_initialized": False}
+    fg.run_news(_frame_cfg(tmp_path), state, dry_run=False)
+    assert state["seen_news"] == ["g1"] and state["news_initialized"] is True and pushed == []
 
 
-def test_news_new_matching_item_fires(tmp_path, monkeypatch):
+def test_news_all_feeds_failing_does_not_seed(tmp_path, monkeypatch):
+    # A transient outage must not look like "no news" and flip the baseline.
+    monkeypatch.setattr(fg, "fetch_news", lambda url: None)
+    state = {"appdetails": {}, "seen_news": [], "news_initialized": False}
+    fg.run_news(_frame_cfg(tmp_path), state, dry_run=False)
+    assert state["news_initialized"] is False
+
+
+def test_news_new_frame_item_fires_but_filters_others(tmp_path, monkeypatch):
     monkeypatch.setattr(
         fg,
         "fetch_news",
         lambda url: [
-            {"id": "g2", "title": "Steam Frame pre-order live", "link": "http://z", "summary": ""}
+            {"id": "g2", "title": "Steam Frame pre-order live", "link": "http://z", "summary": ""},
+            {"id": "g3", "title": "Update to Store Tags", "link": "http://w", "summary": "tags"},
         ],
     )
     pushed = []
     monkeypatch.setattr(fg, "notify", lambda cfg, **kw: pushed.append(kw) or True)
-    cfg = fg.Config(ntfy_topic="t", state_file=tmp_path / "s.json")
-    state = {"appdetails": {}, "seen_news": ["old"]}  # not a cold start
-    fg.run_news(cfg, state, dry_run=False)
-    assert "g2" in state["seen_news"] and len(pushed) == 1
+    state = {"appdetails": {}, "seen_news": ["old"], "news_initialized": True}  # warm
+    fg.run_news(_frame_cfg(tmp_path), state, dry_run=False)
+    # both marked seen; only the Frame one pushed
+    assert "g2" in state["seen_news"] and "g3" in state["seen_news"]
+    assert len(pushed) == 1 and "g3" not in pushed[0]["body"]
 
 
 def test_appdetails_event_fires_and_dedupes(tmp_path, monkeypatch):

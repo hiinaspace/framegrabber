@@ -16,9 +16,10 @@ so it ships as a Kubernetes **ConfigMap** and runs on a stock `python:3.12-slim`
    `4165890`) stops being `coming_soon`, gets a price, gets purchasable packages, or gets a
    concrete release date. This structurally captures the most likely "final notification":
    *Valve announced a firm date/price.*
-2. **Google News RSS** (keyword-filtered): new "Steam Frame" headlines that also mention an
-   availability keyword (release, order, pre-order, reservation, price, date, …). Plain
-   substring matching — no LLM.
+2. **Official Valve news feeds** (filtered to Steam Frame mentions): the Steam news group
+   (`4145017`), the Steam Hardware group (`45479024`), and the Steam Frame app news hub
+   (`4165890`). New items mentioning the Frame get pushed — Valve's own posts only, no
+   press/aggregator noise, no LLM. (Override the feed list with `FRAMEGRABBER_NEWS_FEEDS`.)
 
 ## Deployment
 
