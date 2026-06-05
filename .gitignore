@@ -1,0 +1,8 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+# never commit the real env (it holds the ntfy topic)
+/env
+.env

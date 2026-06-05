@@ -1,0 +1,40 @@
+[project]
+name = "framegrabber"
+version = "0.1.0"
+description = "Watch Valve's store + news for the Steam Frame release/reservation and push an alert"
+readme = "README.md"
+authors = [
+    { name = "hiina", email = "hiina@hiina.space" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "feedparser>=6.0.12",
+    "httpx>=0.28.1",
+]
+
+[project.scripts]
+framegrabber = "framegrabber.main:main"
+
+[build-system]
+requires = ["uv_build>=0.11.7,<0.12.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pre-commit>=4.6.0",
+    "pytest>=9.0.3",
+    "ruff>=0.15.16",
+    "ty>=0.0.43",
+]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.ty.environment]
+python-version = "3.12"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

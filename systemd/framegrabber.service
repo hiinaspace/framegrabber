@@ -1,0 +1,14 @@
+[Unit]
+Description=Check Valve store + news for Steam Frame release/reservation
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# %h is the user's home. Adjust the path if you cloned framegrabber elsewhere.
+WorkingDirectory=%h/code/framegrabber
+EnvironmentFile=%h/.config/framegrabber/env
+ExecStart=%h/code/framegrabber/.venv/bin/python -m framegrabber.main --once
+# Persistent state lives in ~/.local/state/framegrabber (set by the loader's XDG fallback).
+StandardOutput=journal
+StandardError=journal
