@@ -1,31 +1,23 @@
 [project]
 name = "framegrabber"
-version = "0.1.0"
-description = "Watch Valve's store + news for the Steam Frame release/reservation and push an alert"
+version = "0.2.0"
+description = "Watch Valve's store + news for the Steam Frame release and push an ntfy alert"
 readme = "README.md"
-authors = [
-    { name = "hiina", email = "hiina@hiina.space" }
-]
 requires-python = ">=3.12"
-dependencies = [
-    "feedparser>=6.0.12",
-    "httpx>=0.28.1",
-]
-
-[project.scripts]
-framegrabber = "framegrabber.main:main"
-
-[build-system]
-requires = ["uv_build>=0.11.7,<0.12.0"]
-build-backend = "uv_build"
+# Runtime is stdlib-only on purpose: the script ships as a k8s ConfigMap and runs on a stock
+# python:3.12-slim image with no dependencies or build step.
+dependencies = []
 
 [dependency-groups]
 dev = [
-    "pre-commit>=4.6.0",
     "pytest>=9.0.3",
     "ruff>=0.15.16",
     "ty>=0.0.43",
 ]
+
+# Not an installable package — just a script + tests.
+[tool.uv]
+package = false
 
 [tool.ruff]
 line-length = 100
@@ -37,4 +29,5 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 python-version = "3.12"
 
 [tool.pytest.ini_options]
+pythonpath = ["."]
 testpaths = ["tests"]

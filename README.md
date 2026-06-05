@@ -1,97 +1,50 @@
 # framegrabber
 
-A small watcher that pings your phone the moment Valve's **Steam Frame** becomes orderable —
-whether that's a normal store "Buy" page or a reservation/waitlist setup. It polls Valve's
-official store API + the hardware landing page + news, on a 2-minute systemd timer, and pushes
-an alert via [ntfy](https://ntfy.sh). It only **alerts** — no auto-cart, no botting.
+A small watcher that pushes an [ntfy](https://ntfy.sh) alert when Valve's **Steam Frame** moves
+toward release. Posture is deliberately low-key — "a fancier RSS feed" — on the assumption that
+Valve announces availability (firm date / reservations / orders) with a week or so of lead time,
+not out of nowhere. So it polls every ~15 minutes and sends **one push per new event, no
+repeats**; the alert is your cue to go read the details and decide what to do.
 
-## How it decides
+It's a single **stdlib-only** Python file (`framegrabber.py`) — no third-party deps, no build —
+so it ships as a Kubernetes **ConfigMap** and runs on a stock `python:3.12-slim` image via a
+**CronJob**. State lives in a JSON file on a persistent volume so cron runs don't re-alert.
 
-Three signals, in order of reliability:
+## Signals
 
-1. **Steam store API (primary, rule-based — no LLM).** Polls
-   `store.steampowered.com/api/appdetails` for the Steam Frame (appid **4165890**). It fires an
-   urgent alert the instant the app stops being "coming soon", a price appears, purchasable
-   packages appear, or a real release date is set. Verified live: today it's `coming_soon: true`,
-   no price, no packages. This signal is conservative and near-zero-false-positive, and never
-   depends on Claude or a healthy network.
-2. **Landing-page reservation/CTA (LLM-triaged).** Hashes only the reservation/purchase-relevant
-   lines of the React store page; on change, asks Haiku "is this an availability/reservation
-   event?" and pushes if so. Catch-net for a reservation/waitlist flow the API might not reflect.
-3. **News (LLM-triaged).** Google News RSS for "Steam Frame"; new headlines are judged by Haiku
-   to filter specs/rumor noise from real "now orderable/reservable" news. Early heads-up.
+1. **Steam store appdetails API** (rule-based, no fuzz): fires when the Steam Frame (appid
+   `4165890`) stops being `coming_soon`, gets a price, gets purchasable packages, or gets a
+   concrete release date. This structurally captures the most likely "final notification":
+   *Valve announced a firm date/price.*
+2. **Google News RSS** (keyword-filtered): new "Steam Frame" headlines that also mention an
+   availability keyword (release, order, pre-order, reservation, price, date, …). Plain
+   substring matching — no LLM.
 
-The LLM is `claude -p --model haiku` shelled out locally (inherits your `~/.claude` auth). If it
-fails, the landing-page signal **fails toward alerting** (a low-priority "check manually" ping);
-the primary signal never touches it.
+## Deployment
 
-A real availability trigger writes a `~/.local/state/framegrabber/ALERTED` flag and **keeps
-re-pinging every run until you acknowledge** (`framegrabber --ack`), so one dropped notification
-can't cost you first-in-line.
+Runs as a k8s CronJob, defined in the `fleet-infra` repo at `infra/my-cluster/framegrabber/`
+(FluxCD-managed). The CronJob mounts `framegrabber.py` from a ConfigMap, reads config from a
+ConfigMap + a sops-encrypted Secret (`NTFY_TOKEN`), and persists state to a longhorn PVC. To
+change the script, update it there (the ConfigMap is generated from the file) and Flux redeploys.
 
-## Setup
-
-```sh
-git clone <repo> ~/code/framegrabber && cd ~/code/framegrabber
-uv sync                      # create .venv and install
-
-# 1. Pick a long random ntfy topic and subscribe to it in the ntfy phone app.
-mkdir -p ~/.config/framegrabber
-cp env.example ~/.config/framegrabber/env
-chmod 600 ~/.config/framegrabber/env
-$EDITOR ~/.config/framegrabber/env     # set NTFY_TOPIC
-
-# 2. Confirm push works end-to-end (should buzz your phone):
-set -a; source ~/.config/framegrabber/env; set +a   # bash; fish: see note below
-uv run framegrabber --force-alert
-
-# 3. Install the user timer (edit the WorkingDirectory/ExecStart paths in the unit if you
-#    cloned somewhere other than ~/code/framegrabber):
-mkdir -p ~/.config/systemd/user
-cp systemd/framegrabber.{service,timer} ~/.config/systemd/user/
-systemctl --user daemon-reload
-systemctl --user enable --now framegrabber.timer
-
-# 4. Run even when you're not logged in:
-loginctl enable-linger "$USER"
-```
-
-> fish shell: to load the env for a manual run, use
-> `for l in (cat ~/.config/framegrabber/env | grep -v '^#'); set -gx (string split -m1 = $l); end`
-
-## Usage
-
-```sh
-uv run framegrabber --once --verbose   # one manual poll (currently: "no change")
-uv run framegrabber --force-alert       # send a test push
-uv run framegrabber --dry-run           # detect + log, never push or write state
-uv run framegrabber --ack               # stop the "still available!" reminders after you've acted
-```
-
-Check the timer and logs:
-
-```sh
-systemctl --user list-timers | grep framegrabber
-journalctl --user -u framegrabber.service -n 50 --no-pager
-```
-
-## Config
-
-All via `~/.config/framegrabber/env` (see `env.example`): `NTFY_TOPIC` (required), `NTFY_SERVER`,
-`FRAMEGRABBER_CC` (store region, default `us`), `FRAMEGRABBER_APPIDS` (add `4165910` to also watch
-the Steam Machine), `FRAMEGRABBER_CLAUDE_MODEL`, `FRAMEGRABBER_PRIMARY_ONLY=1` (API signal only).
-
-## Develop
+## Local run / dev
 
 ```sh
 uv run pytest -q
 uv run ruff format . && uv run ruff check . && uv run ty check
-pre-commit install      # ruff format + lint + ty on commit
+
+# one manual cycle against the live APIs (won't push without a topic):
+NTFY_TOPIC=test FRAMEGRABBER_STATE=/tmp/fg.json uv run python framegrabber.py --dry-run -v
+
+# send a test push:
+NTFY_SERVER=https://ntfy.vrg.party NTFY_TOPIC=steamframe NTFY_TOKEN=tk_... \
+  uv run python framegrabber.py --force-alert
 ```
 
-State: `~/.local/state/framegrabber/state.json`. Switching to Pushover/Telegram is a one-function
-change in `src/framegrabber/notify.py`.
+## Config
 
-## But could I use a different AI than claude?
+All via environment variables (see `env.example`): `NTFY_SERVER`, `NTFY_TOPIC`, `NTFY_TOKEN`,
+`FRAMEGRABBER_STATE`, `FRAMEGRABBER_CC`, `FRAMEGRABBER_APPIDS` (add `4165910` to also watch the
+Steam Machine), `FRAMEGRABBER_NEWS_KEYWORDS`, `FRAMEGRABBER_PRIMARY_ONLY`.
 
-Yeah it's not a complex parsing job, and only runs when things change. Ask your AI of choice to change the code to call some other API.
+Switching ntfy → Pushover/Telegram is a small change in `notify()`.
