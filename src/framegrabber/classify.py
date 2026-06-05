@@ -13,9 +13,28 @@ from __future__ import annotations
 
 import json
 import logging
+import shutil
 import subprocess
+from pathlib import Path
 
 log = logging.getLogger(__name__)
+
+
+def _resolve_claude(bin_name: str) -> str | None:
+    """Find the claude binary without relying on PATH (systemd units have a minimal one).
+
+    Honors an absolute/explicit path, then PATH, then the usual install locations.
+    """
+    if "/" in bin_name:
+        return bin_name if Path(bin_name).exists() else None
+    found = shutil.which(bin_name)
+    if found:
+        return found
+    for cand in (Path.home() / ".local/bin" / bin_name, Path("/usr/local/bin") / bin_name):
+        if cand.exists():
+            return str(cand)
+    return None
+
 
 _PROMPT = """\
 You are a release-watcher for Valve's "Steam Frame" VR headset. Decide whether the input below \
@@ -34,10 +53,16 @@ INPUT:
 """
 
 
-def _run_claude(model: str, payload: str, timeout: int = 60) -> dict | None:
+def _run_claude(
+    model: str, payload: str, claude_bin: str = "claude", timeout: int = 60
+) -> dict | None:
+    exe = _resolve_claude(claude_bin)
+    if exe is None:
+        log.warning("claude binary %r not found (PATH or ~/.local/bin)", claude_bin)
+        return None
     try:
         proc = subprocess.run(
-            ["claude", "-p", "--model", model, "--output-format", "json"],
+            [exe, "-p", "--model", model, "--output-format", "json"],
             input=_PROMPT + payload,
             capture_output=True,
             text=True,
@@ -74,9 +99,9 @@ def _extract_json(text: str) -> dict | None:
         return None
 
 
-def classify(model: str, payload: str, *, fail_open: bool) -> dict:
+def classify(model: str, payload: str, *, fail_open: bool, claude_bin: str = "claude") -> dict:
     """Return a verdict dict. On LLM failure, synthesize one per ``fail_open``."""
-    verdict = _run_claude(model, payload)
+    verdict = _run_claude(model, payload, claude_bin)
     if verdict is None:
         if fail_open:
             return {

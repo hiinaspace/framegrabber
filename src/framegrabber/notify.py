@@ -29,16 +29,20 @@ def notify(
     # HTTP headers must be ASCII; the body is UTF-8 so emoji belong there, and the icon comes
     # from Tags. Drop any non-ASCII from the title header so a stray emoji can't crash a run.
     safe_title = title.encode("ascii", "ignore").decode("ascii").strip() or "framegrabber"
+    headers = {
+        "Title": safe_title,
+        "Priority": str(priority),
+        "Tags": tags,
+        "Click": url,
+    }
+    # Authenticate the publish on access-controlled servers (read-only-by-default self-host).
+    if cfg.ntfy_token:
+        headers["Authorization"] = f"Bearer {cfg.ntfy_token}"
     try:
         resp = httpx.post(
             f"{cfg.ntfy_server.rstrip('/')}/{cfg.ntfy_topic}",
             content=body.encode("utf-8"),
-            headers={
-                "Title": safe_title,
-                "Priority": str(priority),
-                "Tags": tags,
-                "Click": url,
-            },
+            headers=headers,
             timeout=15.0,
         )
         resp.raise_for_status()

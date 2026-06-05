@@ -43,6 +43,36 @@ def test_all_emoji_title_falls_back(monkeypatch):
     assert notify.notify(cfg, "🚨🚨", "b") is True
 
 
+def test_token_sets_authorization_header(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(
+        notify.httpx,
+        "post",
+        lambda url, *, content, headers, timeout: (
+            captured.update(headers=headers)
+            or type("R", (), {"raise_for_status": lambda s: None})()
+        ),
+    )
+    cfg = config.Config(ntfy_topic="t", ntfy_token="tk_secret")
+    assert notify.notify(cfg, "t", "b") is True
+    assert captured["headers"]["Authorization"] == "Bearer tk_secret"
+
+
+def test_no_token_omits_authorization_header(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(
+        notify.httpx,
+        "post",
+        lambda url, *, content, headers, timeout: (
+            captured.update(headers=headers)
+            or type("R", (), {"raise_for_status": lambda s: None})()
+        ),
+    )
+    cfg = config.Config(ntfy_topic="t")
+    assert notify.notify(cfg, "t", "b") is True
+    assert "Authorization" not in captured["headers"]
+
+
 def test_no_topic_returns_false(monkeypatch):
     called = False
 

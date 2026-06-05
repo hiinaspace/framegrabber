@@ -56,9 +56,15 @@ class Config:
     # ntfy push. Topic is the only real secret (anyone who knows it can read/post).
     ntfy_server: str = os.environ.get("NTFY_SERVER", "https://ntfy.sh")
     ntfy_topic: str = os.environ.get("NTFY_TOPIC", "")
+    # Bearer token (tk_…) for publishing to an access-controlled ntfy server. Empty = anonymous
+    # publish (works on a default ntfy.sh topic; required on a read-only self-hosted server).
+    ntfy_token: str = os.environ.get("NTFY_TOKEN", "")
 
     news_rss_url: str = os.environ.get("FRAMEGRABBER_NEWS_RSS", NEWS_RSS_URL)
     claude_model: str = os.environ.get("FRAMEGRABBER_CLAUDE_MODEL", CLAUDE_MODEL)
+    # Name or absolute path of the claude CLI. Resolved PATH-independently in classify.py
+    # because systemd units run with a minimal PATH that omits ~/.local/bin.
+    claude_bin: str = os.environ.get("FRAMEGRABBER_CLAUDE_BIN", "claude")
 
     # When true, the news + landing-page LLM triage steps are skipped (primary signal only).
     primary_only: bool = os.environ.get("FRAMEGRABBER_PRIMARY_ONLY", "") == "1"

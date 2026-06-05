@@ -5,6 +5,33 @@ from __future__ import annotations
 from framegrabber import classify
 
 
+def test_resolve_claude_prefers_path(monkeypatch):
+    monkeypatch.setattr(classify.shutil, "which", lambda name: "/usr/bin/claude")
+    assert classify._resolve_claude("claude") == "/usr/bin/claude"
+
+
+def test_resolve_claude_falls_back_to_local_bin(monkeypatch, tmp_path):
+    monkeypatch.setattr(classify.shutil, "which", lambda name: None)
+    fake_home = tmp_path
+    (fake_home / ".local/bin").mkdir(parents=True)
+    (fake_home / ".local/bin/claude").write_text("#!/bin/sh\n")
+    monkeypatch.setattr(classify.Path, "home", staticmethod(lambda: fake_home))
+    assert classify._resolve_claude("claude") == str(fake_home / ".local/bin/claude")
+
+
+def test_resolve_claude_absolute_path(tmp_path):
+    exe = tmp_path / "claude"
+    exe.write_text("x")
+    assert classify._resolve_claude(str(exe)) == str(exe)
+    assert classify._resolve_claude(str(tmp_path / "missing")) is None
+
+
+def test_resolve_claude_missing_returns_none(monkeypatch, tmp_path):
+    monkeypatch.setattr(classify.shutil, "which", lambda name: None)
+    monkeypatch.setattr(classify.Path, "home", staticmethod(lambda: tmp_path))
+    assert classify._resolve_claude("claude") is None
+
+
 def test_extract_plain_json():
     assert classify._extract_json('{"availability_event": true, "kind": "release"}') == {
         "availability_event": True,

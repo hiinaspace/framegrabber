@@ -77,7 +77,7 @@ def run_landing(cfg: config.Config, st: state.State, client, dry_run: bool) -> N
         "The reservation/purchase-related text on the Steam Frame store page changed to:\n"
         + content[:4000]
     )
-    verdict = classify(cfg.claude_model, payload, fail_open=True)
+    verdict = classify(cfg.claude_model, payload, fail_open=True, claude_bin=cfg.claude_bin)
     st.landing_hash = digest
     st.classified_landing.append(digest)
     if verdict.get("availability_event"):
@@ -109,7 +109,7 @@ def run_news(cfg: config.Config, st: state.State, dry_run: bool) -> None:
         return
     log.info("%d new news item(s)", len(fresh))
     payload = "\n".join(f"- {it['title']} ({it['link']})" for it in fresh)
-    verdict = classify(cfg.claude_model, payload, fail_open=False)
+    verdict = classify(cfg.claude_model, payload, fail_open=False, claude_bin=cfg.claude_bin)
     for it in fresh:
         st.seen_news.append(it["id"])
     if verdict.get("availability_event"):

@@ -7,6 +7,9 @@ Wants=network-online.target
 Type=oneshot
 # %h is the user's home. Adjust the path if you cloned framegrabber elsewhere.
 WorkingDirectory=%h/code/framegrabber
+# Put ~/.local/bin on PATH so the `claude` CLI is found (systemd's default PATH omits it).
+# classify.py also resolves it independently, so this is belt-and-suspenders.
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
 EnvironmentFile=%h/.config/framegrabber/env
 ExecStart=%h/code/framegrabber/.venv/bin/python -m framegrabber.main --once
 # Persistent state lives in ~/.local/state/framegrabber (set by the loader's XDG fallback).
